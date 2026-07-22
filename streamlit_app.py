@@ -10,6 +10,7 @@ Le serveur FastAPI doit tourner en parallèle sur http://127.0.0.1:8000
     uvicorn server:app --reload --port 8000
 """
 
+import pandas as pd
 import requests
 import streamlit as st
 
@@ -39,10 +40,29 @@ def api_delete_config(config_id: str) -> None:
     r.raise_for_status()
 
 
-def api_ask(config_id: str, message: str) -> str:
+def api_ask(config_id: str, message: str) -> list[dict]:
     r = requests.post(f"{API_URL}/configs/{config_id}/ask", json={"message": message})
     r.raise_for_status()
-    return r.json()["response"]
+    return r.json()["solutions"]
+
+
+def render_solutions(solutions: list[dict]) -> None:
+    """Affiche les solutions sous forme de tableau avec liens cliquables."""
+    if not solutions:
+        st.caption("Aucune solution retournée.")
+        return
+
+    df = pd.DataFrame(solutions)[["name", "description", "license_or_pricing", "url"]]
+    df.columns = ["Solution", "Description", "Licence / tarification", "Lien"]
+
+    st.dataframe(
+        df,
+        column_config={
+            "Lien": st.column_config.LinkColumn("Lien", display_text="Ouvrir ↗"),
+        },
+        hide_index=True,
+        use_container_width=True,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -131,7 +151,10 @@ history = st.session_state.chat_history.setdefault(active_id, [])
 
 for role, content in history:
     with st.chat_message(role):
-        st.markdown(content)
+        if role == "assistant":
+            render_solutions(content)
+        else:
+            st.markdown(content)
 
 user_message = st.chat_input("Décris ton projet et ta stack technique...")
 
@@ -143,9 +166,15 @@ if user_message:
     with st.chat_message("assistant"):
         with st.spinner("L'agent réfléchit..."):
             try:
-                answer = api_ask(active_id, user_message)
+                solutions = api_ask(active_id, user_message)
+                error = None
             except requests.exceptions.RequestException as e:
-                answer = f"Erreur lors de l'appel à l'agent : {e}"
-        st.markdown(answer)
+                solutions = []
+                error = f"Erreur lors de l'appel à l'agent : {e}"
 
-    history.append(("assistant", answer))
+        if error:
+            st.error(error)
+        else:
+            render_solutions(solutions)
+
+    history.append(("assistant", solutions if not error else []))

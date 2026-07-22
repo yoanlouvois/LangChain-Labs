@@ -11,12 +11,18 @@ La partie API (FastAPI) ou UI (Streamlit) viendra l'importer ensuite.
 import os
 
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
 from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
 from langgraph.checkpoint.memory import InMemorySaver
 
-load_dotenv()  # charge les variables depuis .env local
+# --------------------------------------------------------------------------
+# 1. Configuration
+# --------------------------------------------------------------------------
+
+load_dotenv()  # charge les variables depuis un fichier .env local
 
 REQUIRED_ENV_VARS = ["GROQ_API_KEY", "TAVILY_API_KEY"]
 missing = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
@@ -26,7 +32,11 @@ if missing:
         "Ajoute-les dans un fichier .env à la racine du projet."
     )
 
-MODEL_NAME = "llama-3.1-8b-instant"
+# llama-3.1-8b-instant est rapide mais peu fiable pour le tool calling :
+# il lui arrive d'écrire l'appel d'outil en texte brut dans sa réponse
+# finale (ex: "<function=tavily_search>...") au lieu de faire un vrai appel
+# structuré. Le 70B est beaucoup plus fiable sur ce point.
+MODEL_NAME = "llama-3.3-70b-versatile"
 
 SYSTEM_PROMPT = (
     "Tu es un assistant spécialisé dans la recommandation de technologies "
@@ -36,20 +46,45 @@ SYSTEM_PROMPT = (
     "- un langage ou une stack technique.\n\n"
     "Propose entre 3 et 5 solutions adaptées.\n"
     "Utilise l'outil de recherche web pour vérifier la licence, "
-    "la tarification et les éventuelles restrictions d'utilisation.\n"
-    "Privilégie les sources officielles.\n\n"
-    "Retourne uniquement un tableau Markdown avec les colonnes suivantes :\n"
-    "| Solution | Description | Licence ou tarification |\n\n"
-    "Dans la dernière colonne, précise par exemple : MIT, Apache 2.0, "
-    "open source, gratuit, freemium ou payant. "
-    "Si l'information n'a pas pu être vérifiée, indique 'À vérifier'."
+    "la tarification, et trouver le lien officiel (site ou doc) de chaque "
+    "solution. Privilégie les sources officielles.\n\n"
+    "Si une information n'a pas pu être vérifiée, indique 'À vérifier'."
 )
+
+
+# --------------------------------------------------------------------------
+# Schéma de sortie structurée
+# --------------------------------------------------------------------------
+# On force l'agent à répondre selon ce schéma plutôt que de lui demander un
+# tableau Markdown en texte libre : ça élimine le risque que du texte
+# parasite (raisonnement, appels d'outils mal formatés...) se glisse dans
+# la réponse finale.
+
+class TechSolution(BaseModel):
+    name: str = Field(description="Nom de la solution/bibliothèque")
+    description: str = Field(description="Description courte, une phrase")
+    license_or_pricing: str = Field(
+        description="Licence ou tarification, ex: MIT, Apache 2.0, open source, gratuit, freemium, payant, À vérifier"
+    )
+    url: str = Field(description="Lien officiel (site ou documentation)")
+
+
+class TechRecommendations(BaseModel):
+    solutions: list[TechSolution]
+
+# --------------------------------------------------------------------------
+# 2. Modèle
+# --------------------------------------------------------------------------
 
 llm = ChatGroq(
     model=MODEL_NAME,
     temperature=0.7,
     max_tokens=512,
 )
+
+# --------------------------------------------------------------------------
+# 3. Outils
+# --------------------------------------------------------------------------
 
 search_tool = TavilySearch(
     max_results=2,
@@ -58,20 +93,36 @@ search_tool = TavilySearch(
 )
 
 tools = [search_tool]
+
+# --------------------------------------------------------------------------
+# 4. Mémoire (checkpointer)
+# --------------------------------------------------------------------------
+
+# InMemorySaver : suffisant pour du dev/test local (rien n'est persisté sur
+# disque). Pour une vraie appli il faudra basculer sur un SqliteSaver ou
+# PostgresSaver -- même interface, seul le stockage change.
 checkpointer = InMemorySaver()
 
-# Agent
+# --------------------------------------------------------------------------
+# 5. Agent
+# --------------------------------------------------------------------------
+
 agent = create_agent(
     model=llm,
     tools=tools,
     checkpointer=checkpointer,
     system_prompt=SYSTEM_PROMPT,
+    response_format=ToolStrategy(TechRecommendations),
 )
 
 
-def ask_agent(user_input: str, thread_id: str = "default") -> str:
+# --------------------------------------------------------------------------
+# 6. Fonction d'invocation
+# --------------------------------------------------------------------------
+
+def ask_agent(user_input: str, thread_id: str = "default") -> list[dict]:
     """
-    Envoie une requête à l'agent et retourne uniquement sa réponse finale.
+    Envoie une requête à l'agent et retourne sa réponse structurée.
 
     Parameters
     ----------
@@ -84,8 +135,9 @@ def ask_agent(user_input: str, thread_id: str = "default") -> str:
 
     Returns
     -------
-    str
-        Réponse finale générée par l'agent (tableau Markdown).
+    list[dict]
+        Liste de solutions, chacune avec name / description /
+        license_or_pricing / url.
     """
     config = {"configurable": {"thread_id": thread_id}}
 
@@ -94,10 +146,13 @@ def ask_agent(user_input: str, thread_id: str = "default") -> str:
         config=config,
     )
 
-    return result["messages"][-1].content
+    structured: TechRecommendations = result["structured_response"]
+    return [s.model_dump() for s in structured.solutions]
 
 
-# Test en standalone (python agent.py)
+# --------------------------------------------------------------------------
+# 7. Test en standalone (python agent.py)
+# --------------------------------------------------------------------------
 
 if __name__ == "__main__":
     reponse = ask_agent(

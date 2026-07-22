@@ -39,6 +39,10 @@ class ConfigMeta(BaseModel):
 configs: dict[str, ConfigMeta] = {}
 
 
+# --------------------------------------------------------------------------
+# Schémas de requête
+# --------------------------------------------------------------------------
+
 class CreateConfigRequest(BaseModel):
     name: str = Field(default="Sans nom", description="Nom lisible de la configuration")
 
@@ -47,9 +51,16 @@ class AskRequest(BaseModel):
     message: str = Field(description="Message envoyé à l'agent")
 
 
+class TechSolution(BaseModel):
+    name: str
+    description: str
+    license_or_pricing: str
+    url: str
+
+
 class AskResponse(BaseModel):
     config_id: str
-    response: str
+    solutions: list[TechSolution]
 
 
 # --------------------------------------------------------------------------
@@ -112,9 +123,12 @@ def ask(config_id: str, req: AskRequest):
         {"messages": [{"role": "user", "content": req.message}]},
         config=thread_config,
     )
-    answer = result["messages"][-1].content
+    structured = result["structured_response"]
 
-    return AskResponse(config_id=config_id, response=answer)
+    return AskResponse(
+        config_id=config_id,
+        solutions=[TechSolution(**s.model_dump()) for s in structured.solutions],
+    )
 
 
 # --------------------------------------------------------------------------
