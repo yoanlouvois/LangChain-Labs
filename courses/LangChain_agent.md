@@ -479,7 +479,6 @@ Points importants pour une vraie app :
 - Le `thread_id` correspond en général à une **session de chat** ou une **conversation** dans ta base applicative (souvent stocké en lien avec ton `user_id` côté app). C'est toi qui décides de la stratégie : un `thread_id` par utilisateur (mémoire globale), ou un par conversation (comme des "chats" séparés façon ChatGPT).
 - Sur des conversations très longues, les checkpoints s'accumulent et peuvent alourdir le stockage/la latence : en production, on met en place une politique de rétention (ex : cron job qui supprime les checkpoints de plus de N jours) ou on trimme régulièrement les messages anciens (cf. middleware `@before_model`, section 2.2 / doc [Short-term memory](https://docs.langchain.com/oss/python/langchain/short-term-memory)).
 - Pour une app qui doit se souvenir d'infos **entre plusieurs conversations différentes** (pas juste dans un thread), c'est le rôle du **`store`** (`InMemoryStore`, ou une version persistante) plutôt que du checkpointer — voir [Long-term memory](https://docs.langchain.com/oss/python/langchain/long-term-memory).
-**Résumé pratique** : pour ton TP sur Colab → `InMemorySaver` suffit largement. Le jour où tu déploies une vraie app (API, backend web), tu remplaces juste `InMemorySaver()` par `PostgresSaver.from_conn_string(...)` — le reste du code (`create_agent`, `thread_id`, `invoke`) ne change pas.
  
 ---
  
