@@ -1,0 +1,6 @@
+langchain
+langchain-groq
+langchain-tavily
+streamlit
+uvicorn
+fastapi
