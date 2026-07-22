@@ -382,49 +382,6 @@ Principaux décorateurs : `@before_model`, `@after_model`, `@wrap_model_call`, `
 
 ---
 
-## 5. Exemple complet pour ton TP (Groq + tools + mémoire)
-
-```python
-!pip install -qU langchain langchain-groq
-
-import os
-from langchain.agents import create_agent
-from langchain.tools import tool
-
-os.environ["GROQ_API_KEY"] = "ta_clé_groq"
-
-@tool
-def get_weather(location: str) -> str:
-    """Renvoie la météo pour une ville donnée."""
-    # Ici tu pourrais appeler une vraie API météo
-    return f"Il fait beau à {location}, 22°C."
-
-@tool
-def calculate(expression: str) -> str:
-    """Évalue une expression mathématique simple, ex: '2 + 2'."""
-    try:
-        return str(eval(expression))
-    except Exception as e:
-        return f"Erreur de calcul : {e}"
-
-agent = create_agent(
-    model="groq:llama-3.1-8b-instant",
-    tools=[get_weather, calculate],
-    system_prompt="Tu es un assistant utile et concis. Utilise les outils quand c'est pertinent.",
-)
-
-result = agent.invoke({
-    "messages": [{"role": "user", "content": "Quel temps fait-il à Lyon, et combien font 15*7 ?"}]
-})
-
-for m in result["messages"]:
-    print(m.type, ":", m.content if m.content else m.tool_calls)
-```
-
-Cet exemple pose les bases (model + tools + system prompt + invocation). Pour la suite de ton TP (RAG, mémoire persistante, middleware custom), tu peux enrichir cet agent progressivement en suivant les sections 4.1 à 4.3 ci-dessus.
-
----
-
 ## 6. Pour aller plus loin
 
 - Doc officielle Agents : https://docs.langchain.com/oss/python/langchain/agents
