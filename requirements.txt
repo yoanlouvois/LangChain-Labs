@@ -4,3 +4,4 @@ langchain-tavily
 streamlit
 uvicorn
 fastapi
+dotenv
