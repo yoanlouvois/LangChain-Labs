@@ -382,8 +382,109 @@ Principaux décorateurs : `@before_model`, `@after_model`, `@wrap_model_call`, `
 
 ---
 
+### 4.4 Checkpointer et `InMemorySaver` — donner une vraie mémoire à l'agent
+ 
+Jusqu'ici, chaque `agent.invoke(...)` est **stateless** : l'agent ne se souvient de rien d'un appel à l'autre, sauf si tu renvoies toi-même tout l'historique des messages à chaque fois. Le **checkpointer** résout ce problème.
+ 
+#### Le concept
+ 
+Le checkpointer est le mécanisme de LangGraph (le moteur sous-jacent de `create_agent`) qui **sauvegarde un instantané ("checkpoint") de l'état du graphe à chaque étape** de son exécution (après chaque appel modèle, chaque exécution d'outil...). Il permet :
+ 
+- **La mémoire conversationnelle** : l'agent retrouve automatiquement l'historique d'une conversation, sans que tu aies à le renvoyer manuellement.
+- **La reprise après interruption** : utile notamment pour le [human-in-the-loop](https://docs.langchain.com/oss/python/langchain/human-in-the-loop), où l'exécution peut être mise en pause en attendant une validation humaine, puis reprise exactement où elle s'était arrêtée.
+- **L'isolation multi-conversations** : plusieurs utilisateurs peuvent dialoguer avec le même agent sans que leurs historiques se mélangent, grâce à un **`thread_id`**.
+Le checkpointer est **invisible dans ton code métier** : tu ne l'appelles jamais toi-même dans un tool ou un middleware, LangGraph s'en charge automatiquement dès que tu le passes à `create_agent`.
+ 
+Chaque conversation est identifiée par un `thread_id` (un simple string que tu choisis), passé dans le `config` à chaque `invoke` :
+ 
+```python
+from langchain.agents import create_agent
+from langgraph.checkpoint.memory import InMemorySaver
+ 
+checkpointer = InMemorySaver()
+ 
+agent = create_agent(
+    model="groq:llama-3.1-8b-instant",
+    checkpointer=checkpointer,
+)
+ 
+config = {"configurable": {"thread_id": "demo-thread-1"}}
+ 
+agent.invoke({"messages": [{"role": "user", "content": "Salut, je m'appelle Bob."}]}, config)
+result = agent.invoke({"messages": [{"role": "user", "content": "Je m'appelle comment ?"}]}, config)
+print(result["messages"][-1].content)
+# "Tu t'appelles Bob !"
+```
+ 
+`InMemorySaver` (nom actuel de la classe — l'ancienne s'appelait `MemorySaver`, désormais dépréciée) est l'implémentation **la plus simple** : elle stocke tout **en RAM, dans le process Python**. Parfait pour prototyper et pour un TP, mais tout est perdu au redémarrage du notebook/serveur — ce n'est **pas persistant**.
+ 
+#### Checkpointer vs Store — ne pas confondre
+ 
+| | **Checkpointer** | **Store** |
+|---|---|---|
+| Portée | Une conversation (un `thread_id`) | Transversal, entre plusieurs threads/utilisateurs |
+| Usage | Historique des messages, état d'exécution | Faits appris sur un utilisateur, préférences durables |
+| Écriture | Automatique, géré par LangGraph | Explicite, dans tes tools/middleware |
+| Analogie | Mémoire **court terme** de la conversation | Mémoire **long terme**, façon profil utilisateur |
+ 
+#### Passer en vraie application : persister dans une base de données
+ 
+En production, `InMemorySaver` ne suffit pas (perte de données au redémarrage, ne scale pas sur plusieurs instances de ton backend). LangGraph fournit des checkpointers backés par une vraie base de données, avec **exactement la même interface** — seul le stockage change.
+ 
+**Option SQLite** — fichier local, simple pour une petite app ou un prototype qui doit survivre aux redémarrages :
+ 
+```python
+!pip install -qU langgraph-checkpoint-sqlite
+ 
+from langgraph.checkpoint.sqlite import SqliteSaver
+ 
+with SqliteSaver.from_conn_string("checkpoints.db") as checkpointer:
+    agent = create_agent(
+        model="groq:llama-3.1-8b-instant",
+        checkpointer=checkpointer,
+    )
+    config = {"configurable": {"thread_id": "user-42"}}
+    result = agent.invoke({"messages": [{"role": "user", "content": "Salut !"}]}, config)
+```
+ 
+**Option PostgreSQL** — la solution recommandée pour une vraie application en production (multi-utilisateurs, plusieurs instances de serveur, besoin de fiabilité) :
+ 
+```python
+!pip install -qU langgraph-checkpoint-postgres psycopg[binary]
+ 
+from langgraph.checkpoint.postgres import PostgresSaver
+ 
+DB_URI = "postgresql://user:password@localhost:5432/ma_base"
+ 
+with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
+    checkpointer.setup()  # ⚠️ à appeler une seule fois : crée les tables nécessaires
+ 
+    agent = create_agent(
+        model="groq:llama-3.1-8b-instant",
+        checkpointer=checkpointer,
+    )
+ 
+    config = {"configurable": {"thread_id": "user-42"}}
+    result = agent.invoke(
+        {"messages": [{"role": "user", "content": "Salut, je suis de retour !"}]},
+        config,
+    )
+    print(result["messages"][-1].content)
+```
+ 
+Points importants pour une vraie app :
+ 
+- **`.setup()`** doit être appelé **une seule fois** (à l'installation/déploiement), pas à chaque démarrage de l'app : il crée les tables SQL nécessaires au stockage des checkpoints.
+- Pour une app **asynchrone** (ex : backend FastAPI), utilise les variantes async : `AsyncPostgresSaver` / `AsyncSqliteSaver`, avec `await checkpointer.asetup()` et `await agent.ainvoke(...)`.
+- Le `thread_id` correspond en général à une **session de chat** ou une **conversation** dans ta base applicative (souvent stocké en lien avec ton `user_id` côté app). C'est toi qui décides de la stratégie : un `thread_id` par utilisateur (mémoire globale), ou un par conversation (comme des "chats" séparés façon ChatGPT).
+- Sur des conversations très longues, les checkpoints s'accumulent et peuvent alourdir le stockage/la latence : en production, on met en place une politique de rétention (ex : cron job qui supprime les checkpoints de plus de N jours) ou on trimme régulièrement les messages anciens (cf. middleware `@before_model`, section 2.2 / doc [Short-term memory](https://docs.langchain.com/oss/python/langchain/short-term-memory)).
+- Pour une app qui doit se souvenir d'infos **entre plusieurs conversations différentes** (pas juste dans un thread), c'est le rôle du **`store`** (`InMemoryStore`, ou une version persistante) plutôt que du checkpointer — voir [Long-term memory](https://docs.langchain.com/oss/python/langchain/long-term-memory).
+**Résumé pratique** : pour ton TP sur Colab → `InMemorySaver` suffit largement. Le jour où tu déploies une vraie app (API, backend web), tu remplaces juste `InMemorySaver()` par `PostgresSaver.from_conn_string(...)` — le reste du code (`create_agent`, `thread_id`, `invoke`) ne change pas.
+ 
+---
+ 
 ## 6. Pour aller plus loin
-
+ 
 - Doc officielle Agents : https://docs.langchain.com/oss/python/langchain/agents
 - Tools : https://docs.langchain.com/oss/python/langchain/tools
 - Middleware : https://docs.langchain.com/oss/python/langchain/middleware/overview
