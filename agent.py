@@ -5,7 +5,6 @@ Agent LangChain de recommandation de technologies / bibliothèques,
 avec recherche web (Tavily) et mémoire de conversation (checkpointer).
 
 Ce module ne fait qu'exposer l'agent et une fonction d'invocation.
-La partie API (FastAPI) ou UI (Streamlit) viendra l'importer ensuite.
 """
 
 import os
@@ -19,10 +18,10 @@ from langchain_tavily import TavilySearch
 from langgraph.checkpoint.memory import InMemorySaver
 
 # --------------------------------------------------------------------------
-# 1. Configuration
+# Configuration
 # --------------------------------------------------------------------------
 
-load_dotenv()  # charge les variables depuis un fichier .env local
+load_dotenv()  # charge les variables depuis le .env local
 
 REQUIRED_ENV_VARS = ["GROQ_API_KEY", "TAVILY_API_KEY"]
 missing = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
@@ -32,10 +31,6 @@ if missing:
         "Ajoute-les dans un fichier .env à la racine du projet."
     )
 
-# llama-3.1-8b-instant est rapide mais peu fiable pour le tool calling :
-# il lui arrive d'écrire l'appel d'outil en texte brut dans sa réponse
-# finale (ex: "<function=tavily_search>...") au lieu de faire un vrai appel
-# structuré. Le 70B est beaucoup plus fiable sur ce point.
 MODEL_NAME = "llama-3.3-70b-versatile"
 
 SYSTEM_PROMPT = (
@@ -55,10 +50,6 @@ SYSTEM_PROMPT = (
 # --------------------------------------------------------------------------
 # Schéma de sortie structurée
 # --------------------------------------------------------------------------
-# On force l'agent à répondre selon ce schéma plutôt que de lui demander un
-# tableau Markdown en texte libre : ça élimine le risque que du texte
-# parasite (raisonnement, appels d'outils mal formatés...) se glisse dans
-# la réponse finale.
 
 class TechSolution(BaseModel):
     name: str = Field(description="Nom de la solution/bibliothèque")
@@ -73,7 +64,7 @@ class TechRecommendations(BaseModel):
     solutions: list[TechSolution]
 
 # --------------------------------------------------------------------------
-# 2. Modèle
+# Modèle
 # --------------------------------------------------------------------------
 
 llm = ChatGroq(
@@ -83,7 +74,7 @@ llm = ChatGroq(
 )
 
 # --------------------------------------------------------------------------
-# 3. Outils
+# Outils
 # --------------------------------------------------------------------------
 
 search_tool = TavilySearch(
@@ -95,17 +86,12 @@ search_tool = TavilySearch(
 tools = [search_tool]
 
 # --------------------------------------------------------------------------
-# 4. Mémoire (checkpointer)
+# Agent
 # --------------------------------------------------------------------------
 
-# InMemorySaver : suffisant pour du dev/test local (rien n'est persisté sur
-# disque). Pour une vraie appli il faudra basculer sur un SqliteSaver ou
-# PostgresSaver -- même interface, seul le stockage change.
+# InMemorySaver : stockage en mémoire vive
+# pour du persistent SqliteSaver ou PostgresSaver -- même interface, seul le stockage change.
 checkpointer = InMemorySaver()
-
-# --------------------------------------------------------------------------
-# 5. Agent
-# --------------------------------------------------------------------------
 
 agent = create_agent(
     model=llm,
@@ -114,11 +100,6 @@ agent = create_agent(
     system_prompt=SYSTEM_PROMPT,
     response_format=ToolStrategy(TechRecommendations),
 )
-
-
-# --------------------------------------------------------------------------
-# 6. Fonction d'invocation
-# --------------------------------------------------------------------------
 
 def ask_agent(user_input: str, thread_id: str = "default") -> list[dict]:
     """
@@ -149,11 +130,7 @@ def ask_agent(user_input: str, thread_id: str = "default") -> list[dict]:
     structured: TechRecommendations = result["structured_response"]
     return [s.model_dump() for s in structured.solutions]
 
-
-# --------------------------------------------------------------------------
-# 7. Test en standalone (python agent.py)
-# --------------------------------------------------------------------------
-
+# Test (python agent.py)
 if __name__ == "__main__":
     reponse = ask_agent(
         user_input=(

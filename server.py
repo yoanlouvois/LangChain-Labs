@@ -25,10 +25,8 @@ from agent import agent, checkpointer
 app = FastAPI(title="Tech Advisor Agent API")
 
 
-# --------------------------------------------------------------------------
 # Stockage des configurations (métadonnées uniquement -- l'historique des
-# messages, lui, vit dans le checkpointer de l'agent)
-# --------------------------------------------------------------------------
+# messages, lui, vit dans le checkpointer de l'agent)-
 
 class ConfigMeta(BaseModel):
     id: str
@@ -37,11 +35,6 @@ class ConfigMeta(BaseModel):
 
 
 configs: dict[str, ConfigMeta] = {}
-
-
-# --------------------------------------------------------------------------
-# Schémas de requête
-# --------------------------------------------------------------------------
 
 class CreateConfigRequest(BaseModel):
     name: str = Field(default="Sans nom", description="Nom lisible de la configuration")
@@ -131,10 +124,8 @@ def ask(config_id: str, req: AskRequest):
     )
 
 
-# --------------------------------------------------------------------------
-# Lancement direct (python server.py) -- sinon: uvicorn server:app --reload
-# --------------------------------------------------------------------------
 
+# Lancement direct (python server.py) -- sinon: uvicorn server:app --reload
 if __name__ == "__main__":
     import uvicorn
 
